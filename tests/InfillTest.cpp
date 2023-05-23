@@ -1,12 +1,15 @@
-// Copyright (c) 2022 Ultimaker B.V.
-// CuraEngine is released under the terms of the AGPLv3 or higher.
+// Copyright (c) 2023 UltiMaker
+// CuraEngine is released under the terms of the AGPLv3 or higher
 
 #include "infill.h"
 #include "ReadTestPolygons.h"
+#include "slicer.h"
 #include "utils/Coord_t.h"
-#include <filesystem>
 #include <gtest/gtest.h>
+#include <filesystem>
 #include <utility>
+
+#include <scripta/logger.h>
 
 // #define TEST_INFILL_SVG_OUTPUT
 #ifdef TEST_INFILL_SVG_OUTPUT
@@ -144,6 +147,9 @@ void writeTestcaseSVG(const InfillTestParameters& params)
 
 InfillTestParameters generateInfillToTest(const InfillParameters& params, const size_t& test_polygon_id, const Polygons& outline_polygons)
 {
+    auto layers = std::vector<SlicerLayer>(200, SlicerLayer{});
+    scripta::setAll(layers);
+
     const EFillMethod pattern = params.pattern;
     const bool zig_zagify = params.zig_zagify;
     const bool connect_polygons = params.connect_polygons;
@@ -167,7 +173,7 @@ InfillTestParameters generateInfillToTest(const InfillParameters& params, const 
     std::vector<VariableWidthLines> result_paths;
     Polygons result_polygons;
     Polygons result_lines;
-    infill.generate(result_paths, result_polygons, result_lines, infill_settings, nullptr, nullptr);
+    infill.generate(result_paths, result_polygons, result_lines, infill_settings, 1, SectionType::INFILL, nullptr, nullptr);
 
     InfillTestParameters result = InfillTestParameters(params, test_polygon_id, outline_polygons, result_lines, result_polygons);
     return result;

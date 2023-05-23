@@ -1,8 +1,10 @@
-// Copyright (c) 2022 Ultimaker B.V.
-// CuraEngine is released under the terms of the AGPLv3 or higher.
+// Copyright (c) 2023 UltiMaker
+// CuraEngine is released under the terms of the AGPLv3 or higher
 
 #include <algorithm> //For std::partition_copy and std::min_element.
 #include <unordered_set>
+
+#include <scripta/logger.h>
 
 #include "WallToolPaths.h"
 
@@ -17,7 +19,7 @@ namespace cura
 {
 
 WallToolPaths::WallToolPaths(const Polygons& outline, const coord_t nominal_bead_width, const size_t inset_count, const coord_t wall_0_inset,
-                             const Settings& settings)
+                             const Settings& settings, const int layer_idx, SectionType section_type)
     : outline(outline)
     , bead_width_0(nominal_bead_width)
     , bead_width_x(nominal_bead_width)
@@ -29,11 +31,13 @@ WallToolPaths::WallToolPaths(const Polygons& outline, const coord_t nominal_bead
     , small_area_length(INT2MM(static_cast<double>(nominal_bead_width) / 2))
     , toolpaths_generated(false)
     , settings(settings)
+    , layer_idx(layer_idx)
+    , section_type(section_type)
 {
 }
 
 WallToolPaths::WallToolPaths(const Polygons& outline, const coord_t bead_width_0, const coord_t bead_width_x,
-                             const size_t inset_count, const coord_t wall_0_inset, const Settings& settings)
+                             const size_t inset_count, const coord_t wall_0_inset, const Settings& settings, const int layer_idx, SectionType section_type )
     : outline(outline)
     , bead_width_0(bead_width_0)
     , bead_width_x(bead_width_x)
@@ -45,19 +49,28 @@ WallToolPaths::WallToolPaths(const Polygons& outline, const coord_t bead_width_0
     , small_area_length(INT2MM(static_cast<double>(bead_width_0) / 2))
     , toolpaths_generated(false)
     , settings(settings)
+    , layer_idx(layer_idx)
+    , section_type( section_type )
 {
 }
 
 const std::vector<VariableWidthLines>& WallToolPaths::generate()
 {
     const coord_t allowed_distance = settings.get<coord_t>("meshfix_maximum_deviation");
+
+    // Sometimes small slivers of polygons mess up the prepared_outline. By performing an open-close operation
+    // with half the minimum printable feature size or minimum line width, these slivers are removed, while still
+    // keeping enough information to not degrade the print quality;
+    // These features can't be printed anyhow. See PR CuraEngine#1811 for some screenshots
+    const coord_t open_close_distance = settings.get<bool>("fill_outline_gaps") ? settings.get<coord_t>("min_feature_size") / 2 - 5 : settings.get<coord_t>("min_wall_line_width") / 2 - 5;
     const coord_t epsilon_offset = (allowed_distance / 2) - 1;
     const AngleRadians transitioning_angle = settings.get<AngleRadians>("wall_transition_angle");
     constexpr coord_t discretization_step_size = MM2INT(0.8);
 
     // Simplify outline for boost::voronoi consumption. Absolutely no self intersections or near-self intersections allowed:
     // TODO: Open question: Does this indeed fix all (or all-but-one-in-a-million) cases for manifold but otherwise possibly complex polygons?
-    Polygons prepared_outline = outline.offset(-epsilon_offset).offset(epsilon_offset * 2).offset(-epsilon_offset);
+    Polygons prepared_outline = outline.offset(-open_close_distance).offset(open_close_distance * 2).offset(-open_close_distance);
+    prepared_outline.removeSmallAreas(small_area_length * small_area_length, false);
     prepared_outline = Simplify(settings).polygon(prepared_outline);
     PolygonUtils::fixSelfIntersections(epsilon_offset, prepared_outline);
     prepared_outline.removeDegenerateVerts();
@@ -65,8 +78,8 @@ const std::vector<VariableWidthLines>& WallToolPaths::generate()
     // Removing collinear edges may introduce self intersections, so we need to fix them again
     PolygonUtils::fixSelfIntersections(epsilon_offset, prepared_outline);
     prepared_outline.removeDegenerateVerts();
-    prepared_outline.removeSmallAreas(small_area_length * small_area_length, false);
     prepared_outline = prepared_outline.unionPolygons();
+    prepared_outline = Simplify(settings).polygon(prepared_outline);
 
     if (prepared_outline.area() <= 0)
     {
@@ -113,25 +126,63 @@ const std::vector<VariableWidthLines>& WallToolPaths::generate()
         discretization_step_size,
         transition_filter_dist,
         allowed_filter_deviation,
-        wall_transition_length
+        wall_transition_length,
+        layer_idx,
+        section_type
     );
     wall_maker.generateToolpaths(toolpaths);
+    scripta::log("toolpaths_0", toolpaths, section_type, layer_idx,
+                 scripta::CellVDI{"is_closed", &ExtrusionLine::is_closed },
+                 scripta::CellVDI{"is_odd", &ExtrusionLine::is_odd },
+                 scripta::CellVDI{"inset_idx", &ExtrusionLine::inset_idx },
+                 scripta::PointVDI{"width", &ExtrusionJunction::w },
+                 scripta::PointVDI{"perimeter_index", &ExtrusionJunction::perimeter_index });
 
     stitchToolPaths(toolpaths, settings);
+    scripta::log("toolpaths_1", toolpaths, section_type, layer_idx,
+                 scripta::CellVDI{"is_closed", &ExtrusionLine::is_closed },
+                 scripta::CellVDI{"is_odd", &ExtrusionLine::is_odd },
+                 scripta::CellVDI{"inset_idx", &ExtrusionLine::inset_idx },
+                 scripta::PointVDI{"width", &ExtrusionJunction::w },
+                 scripta::PointVDI{"perimeter_index", &ExtrusionJunction::perimeter_index });
     
     removeSmallLines(toolpaths);
+    scripta::log("toolpaths_2", toolpaths, section_type, layer_idx,
+                 scripta::CellVDI{"is_closed", &ExtrusionLine::is_closed },
+                 scripta::CellVDI{"is_odd", &ExtrusionLine::is_odd },
+                 scripta::CellVDI{"inset_idx", &ExtrusionLine::inset_idx },
+                 scripta::PointVDI{"width", &ExtrusionJunction::w },
+                 scripta::PointVDI{"perimeter_index", &ExtrusionJunction::perimeter_index });
 
     simplifyToolPaths(toolpaths, settings);
+    scripta::log("toolpaths_3", toolpaths, section_type, layer_idx,
+                 scripta::CellVDI{"is_closed", &ExtrusionLine::is_closed },
+                 scripta::CellVDI{"is_odd", &ExtrusionLine::is_odd },
+                 scripta::CellVDI{"inset_idx", &ExtrusionLine::inset_idx },
+                 scripta::PointVDI{"width", &ExtrusionJunction::w },
+                 scripta::PointVDI{"perimeter_index", &ExtrusionJunction::perimeter_index });
 
     separateOutInnerContour();
 
     removeEmptyToolPaths(toolpaths);
+    scripta::log("toolpaths_4", toolpaths, section_type, layer_idx,
+                 scripta::CellVDI{"is_closed", &ExtrusionLine::is_closed },
+                 scripta::CellVDI{"is_odd", &ExtrusionLine::is_odd },
+                 scripta::CellVDI{"inset_idx", &ExtrusionLine::inset_idx },
+                 scripta::PointVDI{"width", &ExtrusionJunction::w },
+                 scripta::PointVDI{"perimeter_index", &ExtrusionJunction::perimeter_index });
     assert(std::is_sorted(toolpaths.cbegin(), toolpaths.cend(),
                           [](const VariableWidthLines& l, const VariableWidthLines& r)
                           {
                               return l.front().inset_idx < r.front().inset_idx;
                           }) && "WallToolPaths should be sorted from the outer 0th to inner_walls");
     toolpaths_generated = true;
+    scripta::log("toolpaths_5", toolpaths, section_type, layer_idx,
+                 scripta::CellVDI{"is_closed", &ExtrusionLine::is_closed },
+                 scripta::CellVDI{"is_odd", &ExtrusionLine::is_odd },
+                 scripta::CellVDI{"inset_idx", &ExtrusionLine::inset_idx },
+                 scripta::PointVDI{"width", &ExtrusionJunction::w },
+                 scripta::PointVDI{"perimeter_index", &ExtrusionJunction::perimeter_index });
     return toolpaths;
 }
 
@@ -192,11 +243,16 @@ void WallToolPaths::removeSmallLines(std::vector<VariableWidthLines>& toolpaths)
 void WallToolPaths::simplifyToolPaths(std::vector<VariableWidthLines>& toolpaths, const Settings& settings)
 {
     const Simplify simplifier(settings);
-    for(size_t toolpaths_idx = 0; toolpaths_idx < toolpaths.size(); ++toolpaths_idx)
+    for (auto& toolpath : toolpaths)
     {
-        for(ExtrusionLine& line : toolpaths[toolpaths_idx])
+        for (auto& line : toolpath)
         {
             line = line.is_closed ? simplifier.polygon(line) : simplifier.polyline(line);
+
+            if (line.is_closed && line.size() >= 2 && line.front() != line.back())
+            {
+                line.emplace_back(line.front());
+            }
         }
     }
 }

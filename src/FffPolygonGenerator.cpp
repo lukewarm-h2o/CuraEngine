@@ -1,4 +1,4 @@
-// Copyright (c) 2022 Ultimaker B.V.
+// Copyright (c) 2023 UltiMaker
 // CuraEngine is released under the terms of the AGPLv3 or higher
 
 #include <algorithm>
@@ -379,31 +379,15 @@ void FffPolygonGenerator::slices2polygons(SliceDataStorage& storage, TimeKeeper&
     }
 
     const Settings& mesh_group_settings = Application::getInstance().current_slice->scene.current_mesh_group->settings;
-    if (isEmptyLayer(storage, 0) && ! isEmptyLayer(storage, 1))
-    {
-        // the first layer is empty, the second is not empty, so remove the empty first layer as support isn't going to be generated under it.
-        // Do this irrespective of the value of remove_empty_first_layers as that setting is hidden when support is enabled and so cannot be relied upon
-
-        removeEmptyFirstLayers(storage, storage.print_layer_count); // changes storage.print_layer_count!
-    }
-
-    spdlog::info("Layer count: {}", storage.print_layer_count);
-
-    // layerparts2HTML(storage, "output/output.html");
-
-    Progress::messageProgressStage(Progress::Stage::SUPPORT, &time_keeper);
-
-    AreaSupport::generateOverhangAreas(storage);
-    AreaSupport::generateSupportAreas(storage);
-    TreeSupport tree_support_generator(storage);
-    tree_support_generator.generateSupportAreas(storage);
 
     // we need to remove empty layers after we have processed the insets
     // processInsets might throw away parts if they have no wall at all (cause it doesn't fit)
     // brim depends on the first layer not being empty
     // only remove empty layers if we haven't generate support, because then support was added underneath the model.
     //   for some materials it's better to print on support than on the build plate.
-    if (mesh_group_settings.get<bool>("remove_empty_first_layers"))
+    const auto has_support = mesh_group_settings.get<bool>("support_enable") || mesh_group_settings.get<bool>("support_mesh");
+    const auto remove_empty_first_layers = mesh_group_settings.get<bool>("remove_empty_first_layers") && !has_support;
+    if (remove_empty_first_layers)
     {
         removeEmptyFirstLayers(storage, storage.print_layer_count); // changes storage.print_layer_count!
     }
@@ -412,6 +396,13 @@ void FffPolygonGenerator::slices2polygons(SliceDataStorage& storage, TimeKeeper&
         spdlog::warn("Stopping process because there are no non-empty layers.");
         return;
     }
+
+    Progress::messageProgressStage(Progress::Stage::SUPPORT, &time_keeper);
+
+    AreaSupport::generateOverhangAreas(storage);
+    AreaSupport::generateSupportAreas(storage);
+    TreeSupport tree_support_generator(storage);
+    tree_support_generator.generateSupportAreas(storage);
 
     computePrintHeightStatistics(storage);
 
@@ -704,8 +695,8 @@ void FffPolygonGenerator::processDerivedWallsSkinInfill(SliceMeshStorage& mesh)
     // combine infill
     SkinInfillAreaComputation::combineInfillLayers(mesh);
 
-    // fuzzy skin
-    if (mesh.settings.get<bool>("magic_fuzzy_skin_enabled"))
+    // Fuzzy skin. Disabled when using interlocking structures, the internal interlocking walls become fuzzy.
+    if (mesh.settings.get<bool>("magic_fuzzy_skin_enabled") && !mesh.settings.get<bool>("interlocking_enable"))
     {
         processFuzzyWalls(mesh);
     }
@@ -721,7 +712,7 @@ void FffPolygonGenerator::processWalls(SliceMeshStorage& mesh, size_t layer_nr)
 {
     SliceLayer* layer = &mesh.layers[layer_nr];
     WallsComputation walls_computation(mesh.settings, layer_nr);
-    walls_computation.generateWalls(layer);
+    walls_computation.generateWalls(layer, SectionType::WALL);
 }
 
 bool FffPolygonGenerator::isEmptyLayer(SliceDataStorage& storage, const unsigned int layer_idx)

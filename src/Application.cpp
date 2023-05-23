@@ -1,4 +1,4 @@
-// Copyright (c) 2022 Ultimaker B.V.
+// Copyright (c) 2023 UltiMaker
 // CuraEngine is released under the terms of the AGPLv3 or higher
 
 #include "Application.h"
@@ -28,12 +28,15 @@ namespace cura
 
 Application::Application()
 {
-    auto dup_filter = std::make_shared<spdlog::sinks::dup_filter_sink_st>(std::chrono::seconds(5));
-    spdlog::default_logger()->sinks().push_back(dup_filter);
-    auto env_val = spdlog::details::os::getenv("CURAENGINE_LOG_LEVEL");
-    if (! env_val.empty())
+    auto dup_sink = std::make_shared<spdlog::sinks::dup_filter_sink_mt>(std::chrono::seconds{ 10 });
+    auto base_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    dup_sink->add_sink(base_sink);
+
+    spdlog::default_logger()->sinks() = std::vector<std::shared_ptr<spdlog::sinks::sink>>{ dup_sink }; // replace default_logger sinks with the duplicating filtering sink to avoid spamming
+
+    if (auto spdlog_val = spdlog::details::os::getenv("CURAENGINE_LOG_LEVEL"); ! spdlog_val.empty())
     {
-        spdlog::cfg::helpers::load_levels(env_val);
+        spdlog::cfg::helpers::load_levels(spdlog_val);
     }
 }
 
@@ -116,16 +119,12 @@ void Application::printHelp() const
     fmt::print("CuraEngine connect <host>[:<port>] [-j <settings.def.json>]\n");
     fmt::print("  --connect <host>[:<port>]\n\tConnect to <host> via a command socket, \n\tinstead of passing information via the command line\n");
     fmt::print("  -v\n\tIncrease the verbose level (show log messages).\n");
-#ifdef _OPENMP
     fmt::print("  -m<thread_count>\n\tSet the desired number of threads. Supports only a single digit.\n");
-#endif // _OPENMP
     fmt::print("\n");
 #endif // ARCUS
     fmt::print("CuraEngine slice [-v] [-p] [-j <settings.json>] [-s <settingkey>=<value>] [-g] [-e<extruder_nr>] [-o <output.gcode>] [-l <model.stl>] [--next]\n");
     fmt::print("  -v\n\tIncrease the verbose level (show log messages).\n");
-#ifdef _OPENMP
     fmt::print("  -m<thread_count>\n\tSet the desired number of threads.\n");
-#endif // _OPENMP
     fmt::print("  -p\n\tLog progress information.\n");
     fmt::print("  -j\n\tLoad settings.def.json file to register all settings and their defaults.\n");
     fmt::print("  -s <setting>=<value>\n\tSet a setting to a value for the last supplied object, \n\textruder train, or general settings.\n");

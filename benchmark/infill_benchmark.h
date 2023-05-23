@@ -1,4 +1,4 @@
-// Copyright (c) 2022 Ultimaker B.V.
+// Copyright (c) 2023 UltiMaker
 // CuraEngine is released under the terms of the AGPLv3 or higher
 
 #ifndef CURAENGINE_INFILL_BENCHMARK_H
@@ -65,6 +65,7 @@ public:
         settings.add("meshfix_maximum_deviation", "0.1");
         settings.add("meshfix_maximum_extrusion_area_deviation", "0.01");
         settings.add("meshfix_maximum_resolution", "0.01");
+        settings.add("min_wall_line_width", "0.3");
         settings.add("min_bead_width", "0");
         settings.add("min_feature_size", "0");
         settings.add("wall_0_extruder_nr", "0");
@@ -111,7 +112,7 @@ BENCHMARK_DEFINE_F(InfillTest, Infill_generate_connect)(benchmark::State& st)
         std::vector<VariableWidthLines> result_paths;
         Polygons result_polygons;
         Polygons result_lines;
-        infill.generate(result_paths, result_polygons, result_lines, settings, nullptr, nullptr);
+        infill.generate(result_paths, result_polygons, result_lines, settings, 0, SectionType::INFILL, nullptr, nullptr);
     }
 }
 

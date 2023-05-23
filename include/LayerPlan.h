@@ -1,9 +1,11 @@
-//Copyright (c) 2022 Ultimaker B.V.
-//CuraEngine is released under the terms of the AGPLv3 or higher.
+// Copyright (c) 2023 UltiMaker
+// CuraEngine is released under the terms of the AGPLv3 or higher
 
 #ifndef LAYER_PLAN_H
 #define LAYER_PLAN_H
 
+#include <functional>
+#include <limits>
 #include <optional>
 #include <vector>
 #ifdef BUILD_TESTS
@@ -50,7 +52,7 @@ class ExtruderPlan
 #endif
 protected:
     std::vector<GCodePath> paths; //!< The paths planned for this extruder
-    std::list<NozzleTempInsert> inserts; //!< The nozzle temperature command inserts, to be inserted in between paths
+    std::list<NozzleTempInsert> inserts; //!< The nozzle temperature command inserts, to be inserted in between segments
 
     double heated_pre_travel_time; //!< The time at the start of this ExtruderPlan during which the head travels and has a temperature of initial_print_temperature
 
@@ -89,17 +91,10 @@ public:
      */
     ExtruderPlan(const size_t extruder, const LayerIndex layer_nr, const bool is_initial_layer, const bool is_raft_layer, const coord_t layer_thickness, const FanSpeedLayerTimeSettings& fan_speed_layer_time_settings, const RetractionConfig& retraction_config);
 
-    /*!
-     * Add a new Insert, constructed with the given arguments
-     * 
-     * \see NozzleTempInsert
-     * 
-     * \param contructor_args The arguments for the constructor of an insert 
-     */
-    template<typename... Args>
-    void insertCommand(Args&&... contructor_args)
+
+    void insertCommand(auto&& insert)
     {
-        inserts.emplace_back(contructor_args...);
+        inserts.emplace_back(std::forward<decltype(insert)>(insert));
     }
 
     /*!
@@ -107,8 +102,9 @@ public:
      * 
      * \param path_idx The index into ExtruderPlan::paths which is currently being consider for temperature command insertion
      * \param gcode The gcode exporter to which to write the temperature command.
+     * \param cumulative_path_time The time spend on this path up to this point.
      */
-    void handleInserts(unsigned int& path_idx, GCodeExport& gcode);
+    void handleInserts(const size_t path_idx, GCodeExport& gcode, const double& cumulative_path_time = std::numeric_limits<double>::infinity());
 
     /*!
      * Insert all remaining temp inserts into gcode, to be called at the end of an extruder plan
@@ -122,19 +118,25 @@ public:
     void handleAllRemainingInserts(GCodeExport& gcode);
 
     /*!
-     * Applying speed corrections for minimal layer times and determine the fanSpeed. 
+     * Applying fan speed changes for minimal layer times.
      * 
-     * \param force_minimal_layer_time Whether we should apply speed changes and perhaps a head lift in order to meet the minimal layer time
      * \param starting_position The position the head was before starting this extruder plan
+     * \param minTime Maximum minimum layer time for all extruders in this layer
+     * \param time_other_extr_plans The time spent on the other extruder plans in this layer
      */
-    void processFanSpeedAndMinimalLayerTime(bool force_minimal_layer_time, Point starting_position);
+    void processFanSpeedForMinimalLayerTime(Point starting_position, Duration maximum_cool_min_layer_time, double time_other_extr_plans);
+
+    /*!
+     * Applying fan speed changes for the first layers.
+     */
+    void processFanSpeedForFirstLayers();
 
     /*!
      * Get the fan speed computed for this extruder plan
-     * 
-     * \warning assumes ExtruderPlan::processFanSpeedAndMinimalLayerTime has already been called
-     * 
-     * \return The fan speed computed in processFanSpeedAndMinimalLayerTime
+     *
+     * \warning assumes ExtruderPlan::processFanSpeedForMinimalLayerTime has already been called
+     *
+     * \return The fan speed computed in processFanSpeedForMinimalLayerTime
      */
     double getFanSpeed();
 
@@ -164,18 +166,32 @@ protected:
 
     double fan_speed; //!< The fan speed to be used during this extruder plan
 
+    double temperatureFactor; //!< Temperature reduction factor for small layers
+
     /*!
      * Set the fan speed to be used while printing this extruder plan
-     * 
+     *
      * \param fan_speed The speed for the fan
      */
     void setFanSpeed(double fan_speed);
 
     /*!
      * Force the minimal layer time to hold by slowing down and lifting the head if required.
-     * 
+     *
+     * \param maximum_cool_min_layer_time Maximum minimum layer time for all extruders in this layer
+     * \param time_other_extr_plans Time spend on other extruders in this layer
      */
-    void forceMinimalLayerTime(double minTime, double minimalSpeed, double travelTime, double extrusionTime);
+    void forceMinimalLayerTime(double maximum_cool_min_layer_time, double time_other_extr_plans);
+
+    /*!
+     * @return The time needed for (un)retract the path
+     */
+    double getRetractTime(const GCodePath& path);
+
+    /*!
+     * @return distance between p0 and p1 as well as the time spend on the segment
+     */
+    std::pair<double, double> getPointToPointTime(const Point& p0, const Point& p1, const GCodePath& path);
 
     /*!
      * Compute naive time estimates (without accounting for slow down at corners etc.) and naive material estimates.
@@ -603,7 +619,7 @@ public:
      * \param reverse_print_direction Whether to reverse the optimized order and their printing direction.
      * \param order_requirements Pairs where first needs to be printed before second. Pointers are pointing to elements of \p polygons
      */
-    void addLinesByOptimizer(const Polygons& polygons, const GCodePathConfig& config, const SpaceFillType space_fill_type, const bool enable_travel_optimization = false, const coord_t wipe_dist = 0, const Ratio flow_ratio = 1.0, const std::optional<Point> near_start_location = std::optional<Point>(), const double fan_speed = GCodePathConfig::FAN_SPEED_DEFAULT, const bool reverse_print_direction = false, const std::unordered_set<std::pair<ConstPolygonPointer, ConstPolygonPointer>>& order_requirements = PathOrderOptimizer<ConstPolygonPointer>::no_order_requirements);
+    void addLinesByOptimizer(const Polygons& polygons, const GCodePathConfig& config, const SpaceFillType space_fill_type, const bool enable_travel_optimization = false, const coord_t wipe_dist = 0, const Ratio flow_ratio = 1.0, const std::optional<Point> near_start_location = std::optional<Point>(), const double fan_speed = GCodePathConfig::FAN_SPEED_DEFAULT, const bool reverse_print_direction = false, const std::unordered_multimap<ConstPolygonPointer, ConstPolygonPointer>& order_requirements = PathOrderOptimizer<ConstPolygonPointer>::no_order_requirements);
 
     /*!
      * Add polygons to the g-code with monotonic order.
@@ -651,7 +667,7 @@ protected:
      * \param fan_speed optional fan speed override for this path
      */
     void addLinesInGivenOrder(
-        const std::vector<PathOrderPath<ConstPolygonPointer>>& paths, 
+        const std::vector<PathOrdering<ConstPolygonPointer>>& paths,
         const GCodePathConfig& config,
         const SpaceFillType space_fill_type,
         const coord_t wipe_dist,
@@ -748,7 +764,7 @@ public:
      * \param layer_thickness The height of the current layer.
      * \return Whether any GCode has been written for the path.
      */
-    bool writePathWithCoasting(GCodeExport& gcode, const size_t extruder_plan_idx, const size_t path_idx, const coord_t layer_thickness);
+    bool writePathWithCoasting(GCodeExport& gcode, const size_t extruder_plan_idx, const size_t path_idx, const coord_t layer_thickness, const std::function<void(const double, const int64_t)> insertTempOnTime);
 
     /*!
      * Applying speed corrections for minimal layer times and determine the fanSpeed. 

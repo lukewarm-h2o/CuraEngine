@@ -1,9 +1,11 @@
-// Copyright (c) 2022 Ultimaker B.V.
+// Copyright (c) 2023 UltiMaker
 // CuraEngine is released under the terms of the AGPLv3 or higher
 
 #include <algorithm> // remove_if
+#include <numbers>
 #include <stdio.h>
 
+#include <scripta/logger.h>
 #include <spdlog/spdlog.h>
 
 #include "Application.h"
@@ -16,7 +18,7 @@
 #include "utils/SparsePointGridInclusive.h"
 #include "utils/ThreadPool.h"
 #include "utils/gettime.h"
-
+#include "utils/section_type.h"
 
 namespace cura
 {
@@ -790,7 +792,7 @@ Slicer::Slicer(Mesh* i_mesh, const coord_t thickness, const size_t slice_layer_c
     TimeKeeper slice_timer;
 
     layers = buildLayersWithHeight(slice_layer_count, slicing_tolerance, initial_layer_thickness, thickness, use_variable_layer_heights, adaptive_layers);
-
+    scripta::setAll(layers);
 
     std::vector<std::pair<int32_t, int32_t>> zbbox = buildZHeightsForFaces(*mesh);
 
@@ -799,6 +801,7 @@ Slicer::Slicer(Mesh* i_mesh, const coord_t thickness, const size_t slice_layer_c
     spdlog::info("Slice of mesh took {:3} seconds", slice_timer.restart());
 
     makePolygons(*i_mesh, slicing_tolerance, layers);
+    scripta::log("sliced_polygons", layers, SectionType::NA);
     spdlog::info("Make polygons took {:3} seconds", slice_timer.restart());
 }
 
@@ -833,9 +836,9 @@ void Slicer::buildSegments(const Mesh& mesh, const std::vector<std::pair<int32_t
                                // Compensate for points exactly on the slice-boundary, except for 'inclusive', which already handles this correctly.
                                if (slicing_tolerance != SlicingTolerance::INCLUSIVE)
                                {
-                                   p0.z += static_cast<int>(p0.z == z);
-                                   p1.z += static_cast<int>(p1.z == z);
-                                   p2.z += static_cast<int>(p2.z == z);
+                                   p0.z += static_cast<int>(p0.z == z) * -static_cast<int>(p0.z < 1);
+                                   p1.z += static_cast<int>(p1.z == z) * -static_cast<int>(p1.z < 1);
+                                   p2.z += static_cast<int>(p2.z == z) * -static_cast<int>(p2.z < 1);
                                }
 
                                SlicerSegment s;
@@ -1004,17 +1007,63 @@ void Slicer::makePolygons(Mesh& mesh, SlicingTolerance slicing_tolerance, std::v
 
     const coord_t xy_offset = mesh.settings.get<coord_t>("xy_offset");
     const coord_t xy_offset_0 = mesh.settings.get<coord_t>("xy_offset_layer_0");
+    const coord_t xy_offset_hole = mesh.settings.get<coord_t>("hole_xy_offset");
+    const coord_t hole_offset_max_diameter = mesh.settings.get<coord_t>("hole_xy_offset_max_diameter");
 
-    cura::parallel_for<size_t>(0,
-                               layers.size(),
-                               [&layers, layer_apply_initial_xy_offset, xy_offset, xy_offset_0](size_t layer_nr)
-                               {
-                                   const coord_t xy_offset_local = (layer_nr <= layer_apply_initial_xy_offset) ? xy_offset_0 : xy_offset;
-                                   if (xy_offset_local != 0)
-                                   {
-                                       layers[layer_nr].polygons = layers[layer_nr].polygons.offset(xy_offset_local, ClipperLib::JoinType::jtRound);
-                                   }
-                               });
+    const auto max_hole_area = std::numbers::pi / 4 * static_cast<double>(hole_offset_max_diameter * hole_offset_max_diameter);
+
+    cura::parallel_for<size_t>
+    (
+        0,
+        layers.size(),
+        [&layers, layer_apply_initial_xy_offset, xy_offset, xy_offset_0, xy_offset_hole, hole_offset_max_diameter, max_hole_area](size_t layer_nr)
+        {
+            const auto xy_offset_local = (layer_nr <= layer_apply_initial_xy_offset) ? xy_offset_0 : xy_offset;
+            if (xy_offset_local != 0)
+            {
+                layers[layer_nr].polygons = layers[layer_nr].polygons.offset(xy_offset_local, ClipperLib::JoinType::jtRound);
+            }
+            if (xy_offset_hole != 0)
+            {
+                const auto parts = layers[layer_nr].polygons.splitIntoParts();
+                layers[layer_nr].polygons.clear();
+
+                for (const auto& part : parts)
+                {
+                    Polygons holes;
+                    Polygons outline;
+                    for (ConstPolygonRef poly : part)
+                    {
+                        const auto area = poly.area();
+                        const auto abs_area = std::abs(area);
+                        const auto is_hole = area < 0;
+                        if (is_hole)
+                        {
+                            if (hole_offset_max_diameter == 0)
+                            {
+                                holes.add(poly.offset(xy_offset_hole));
+                            }
+                            else if (abs_area < max_hole_area)
+                            {
+                                const auto distance = static_cast<int>(std::lerp(xy_offset_hole, 0, abs_area / max_hole_area));
+                                holes.add(poly.offset(distance));
+                            }
+                            else
+                            {
+                                holes.add(poly);
+                            }
+                        }
+                        else
+                        {
+                            outline.add(poly);
+                        }
+                    }
+
+                    layers[layer_nr].polygons.add(outline.difference(holes.unionPolygons()));
+                }
+            }
+        }
+    );
 
     mesh.expandXY(xy_offset);
 }

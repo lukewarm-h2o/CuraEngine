@@ -1,23 +1,21 @@
-// Copyright (c) 2022 Ultimaker B.V.
+// Copyright (c) 2023 UltiMaker
 // CuraEngine is released under the terms of the AGPLv3 or higher
 
 #include "SkeletalTrapezoidation.h"
 
-#include <spdlog/spdlog.h>
-
-#include "settings/types/Ratio.h"
 #include <functional>
 #include <queue>
 #include <sstream>
 #include <stack>
 #include <unordered_set>
 
+#include <scripta/logger.h>
+#include <spdlog/spdlog.h>
+
+#include "settings/types/Ratio.h"
 #include "BoostInterface.hpp"
-
 #include "utils/VoronoiUtils.h"
-
 #include "utils/linearAlg2D.h"
-
 #include "utils/macros.h"
 
 #define SKELETAL_TRAPEZOIDATION_BEAD_SEARCH_MAX 1000 // A limit to how long it'll keep searching for adjacent beads. Increasing will re-use beadings more often (saving performance), but search longer for beading (costing performance).
@@ -365,13 +363,17 @@ SkeletalTrapezoidation::SkeletalTrapezoidation(const Polygons& polys,
                                                coord_t discretization_step_size,
                                                coord_t transition_filter_dist,
                                                coord_t allowed_filter_deviation,
-                                               coord_t beading_propagation_transition_dist)
+                                               coord_t beading_propagation_transition_dist,
+                                               int layer_idx,
+                                               SectionType section_type)
     : transitioning_angle(transitioning_angle)
     , discretization_step_size(discretization_step_size)
     , transition_filter_dist(transition_filter_dist)
     , allowed_filter_deviation(allowed_filter_deviation)
     , beading_propagation_transition_dist(beading_propagation_transition_dist)
     , beading_strategy(beading_strategy)
+    , layer_idx(layer_idx)
+    , section_type(section_type)
 {
     constructFromPolygons(polys);
 }
@@ -513,14 +515,44 @@ void SkeletalTrapezoidation::generateToolpaths(std::vector<VariableWidthLines>& 
     }
 
     updateBeadCount();
+    scripta::log("st_graph_0", graph, section_type, layer_idx,
+                 scripta::CellVDI{"is_central", [](const auto& edge){ return static_cast<int>(edge.data.is_central); } },
+                 scripta::CellVDI{"type", [](const auto& edge){ return static_cast<int>(edge.data.type); } },
+                 scripta::PointVDI{"distance_to_boundary", [](const auto& node){ return node->data.distance_to_boundary; } },
+                 scripta::PointVDI{"bead_count", [](const auto& node){ return node->data.bead_count; } },
+                 scripta::PointVDI{"transition_ratio", [](const auto& node){ return node->data.transition_ratio; } });
 
     filterNoncentralRegions();
+    scripta::log("st_graph_1", graph, section_type, layer_idx,
+                 scripta::CellVDI{"is_central", [](const auto& edge){ return static_cast<int>(edge.data.is_central); } },
+                 scripta::CellVDI{"type", [](const auto& edge){ return static_cast<int>(edge.data.type); } },
+                 scripta::PointVDI{"distance_to_boundary", [](const auto& node){ return node->data.distance_to_boundary; } },
+                 scripta::PointVDI{"bead_count", [](const auto& node){ return node->data.bead_count; } },
+                 scripta::PointVDI{"transition_ratio", [](const auto& node){ return node->data.transition_ratio; } });
 
     generateTransitioningRibs();
+    scripta::log("st_graph_2", graph, section_type, layer_idx,
+             scripta::CellVDI{"is_central", [](const auto& edge){ return static_cast<int>(edge.data.is_central); } },
+             scripta::CellVDI{"type", [](const auto& edge){ return static_cast<int>(edge.data.type); } },
+             scripta::PointVDI{"distance_to_boundary", [](const auto& node){ return node->data.distance_to_boundary; } },
+             scripta::PointVDI{"bead_count", [](const auto& node){ return node->data.bead_count; } },
+             scripta::PointVDI{"transition_ratio", [](const auto& node){ return node->data.transition_ratio; } });
 
     generateExtraRibs();
+    scripta::log("st_graph_3", graph, section_type, layer_idx,
+             scripta::CellVDI{"is_central", [](const auto& edge){ return static_cast<int>(edge.data.is_central); } },
+             scripta::CellVDI{"type", [](const auto& edge){ return static_cast<int>(edge.data.type); } },
+             scripta::PointVDI{"distance_to_boundary", [](const auto& node){ return node->data.distance_to_boundary; } },
+             scripta::PointVDI{"bead_count", [](const auto& node){ return node->data.bead_count; } },
+             scripta::PointVDI{"transition_ratio", [](const auto& node){ return node->data.transition_ratio; } });
 
     generateSegments();
+    scripta::log("st_graph_4", graph, section_type, layer_idx,
+                 scripta::CellVDI{"is_central", [](const auto& edge){ return static_cast<int>(edge.data.is_central); } },
+                 scripta::CellVDI{"type", [](const auto& edge){ return static_cast<int>(edge.data.type); } },
+                 scripta::PointVDI{"distance_to_boundary", [](const auto& node){ return node->data.distance_to_boundary; } },
+                 scripta::PointVDI{"bead_count", [](const auto& node){ return node->data.bead_count; } },
+                 scripta::PointVDI{"transition_ratio", [](const auto& node){ return node->data.transition_ratio; } });
 }
 
 void SkeletalTrapezoidation::updateIsCentral()
@@ -1405,7 +1437,7 @@ void SkeletalTrapezoidation::generateSegments()
               [this](edge_t* a, edge_t* b)
               {
                   if (a->to->data.distance_to_boundary == b->to->data.distance_to_boundary)
-                  { // Ordering between two 'upward' edges of the same distance is important when one of the edges is flat and connected to the other
+                  { // PathOrdering between two 'upward' edges of the same distance is important when one of the edges is flat and connected to the other
                       if (a->from->data.distance_to_boundary == a->to->data.distance_to_boundary && b->from->data.distance_to_boundary == b->to->data.distance_to_boundary)
                       {
                           coord_t max = std::numeric_limits<coord_t>::max();
@@ -1423,7 +1455,7 @@ void SkeletalTrapezoidation::generateSegments()
                       }
                       else
                       {
-                          // Ordering is not important
+                          // PathOrdering is not important
                       }
                   }
                   return a->to->data.distance_to_boundary > b->to->data.distance_to_boundary;

@@ -1,5 +1,5 @@
-//Copyright (c) 2021 Ultimaker B.V.
-//CuraEngine is released under the terms of the AGPLv3 or higher.
+// Copyright (c) 2023 UltiMaker
+// CuraEngine is released under the terms of the AGPLv3 or higher
 
 #ifndef INFILL_H
 #define INFILL_H
@@ -11,6 +11,7 @@
 #include "settings/Settings.h"
 #include "utils/ExtrusionLine.h"
 #include "utils/IntPoint.h"
+#include "utils/section_type.h"
 
 namespace cura
 {
@@ -39,6 +40,7 @@ class Infill
     coord_t max_resolution; //!< Min feature size of the output
     coord_t max_deviation; //!< Max deviation fro the original poly when enforcing max_resolution
     size_t wall_line_count; //!< Number of walls to generate at the boundary of the infill region, spaced \ref infill_line_width apart
+    coord_t small_area_width; //!< Maximum width of a small infill region to be filled with walls
     const Point infill_origin; //!< origin of the infill pattern
     bool skip_line_stitching; //!< Whether to bypass the line stitching normally performed for polyline type infills
     bool fill_gaps; //!< Whether to fill gaps in strips of infill that would be too thin to fit the infill lines. If disabled, those areas are left empty.
@@ -65,6 +67,7 @@ public:
         , coord_t max_resolution
         , coord_t max_deviation
         , size_t wall_line_count = 0
+        , coord_t small_area_width = 0
         , const Point& infill_origin = Point()
         , bool skip_line_stitching = false
         , bool fill_gaps = true
@@ -88,6 +91,7 @@ public:
     , max_resolution(max_resolution)
     , max_deviation(max_deviation)
     , wall_line_count(wall_line_count)
+    , small_area_width(small_area_width)
     , infill_origin(infill_origin)
     , skip_line_stitching(skip_line_stitching)
     , fill_gaps(fill_gaps)
@@ -115,7 +119,7 @@ public:
      * \param mesh A mesh for which to generate infill (should only be used for non-helper-mesh objects).
      * \param[in] cross_fill_provider The cross fractal subdivision decision functor
      */
-    void generate(std::vector<VariableWidthLines>& toolpaths, Polygons& result_polygons, Polygons& result_lines, const Settings& settings, const SierpinskiFillProvider* cross_fill_provider = nullptr, const LightningLayer * lightning_layer = nullptr, const SliceMeshStorage* mesh = nullptr);
+    void generate(std::vector<VariableWidthLines>& toolpaths, Polygons& result_polygons, Polygons& result_lines, const Settings& settings, int layer_idx, SectionType section_type, const SierpinskiFillProvider* cross_fill_provider = nullptr, const LightningLayer * lightning_layer = nullptr, const SliceMeshStorage* mesh = nullptr);
 
     /*!
      * Generate the wall toolpaths of an infill area. It will return the inner contour and set the inner-contour.
@@ -129,7 +133,7 @@ public:
      * \param settings [in] A settings storage to use for generating variable-width walls.
      * \return The inner contour of the wall toolpaths
      */
-    static Polygons generateWallToolPaths(std::vector<VariableWidthLines>& toolpaths, Polygons& outer_contour, const size_t wall_line_count, const coord_t line_width, const coord_t infill_overlap, const Settings& settings);
+    static Polygons generateWallToolPaths(std::vector<VariableWidthLines>& toolpaths, Polygons& outer_contour, const size_t wall_line_count, const coord_t line_width, const coord_t infill_overlap, const Settings& settings, int layer_idx, SectionType section_type);
 private:
     /*!
      * Generate the infill pattern without the infill_multiplier functionality

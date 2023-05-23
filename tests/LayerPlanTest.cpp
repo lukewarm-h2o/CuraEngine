@@ -1,5 +1,5 @@
-// Copyright (c) 2022 Ultimaker B.V.
-// CuraEngine is released under the terms of the AGPLv3 or higher.
+// Copyright (c) 2023 UltiMaker
+// CuraEngine is released under the terms of the AGPLv3 or higher
 
 #include "LayerPlan.h" //The code under test.
 #include "Application.h" //To provide settings for the layer plan.
@@ -7,6 +7,7 @@
 #include "Slice.h" //To provide settings for the layer plan.
 #include "pathPlanning/Comb.h" //To create a combing path around the layer plan.
 #include "sliceDataStorage.h" //To provide slice data as input for the planning stage.
+#include "pathPlanning/NozzleTempInsert.h" //To provide nozzle temperature commands.
 #include "utils/Coord_t.h"
 #include <gtest/gtest.h>
 
@@ -110,7 +111,6 @@ public:
         settings->add("layer_height", "0.1");
         settings->add("layer_start_x", "0");
         settings->add("layer_start_y", "0");
-        settings->add("limit_support_retractions", "false");
         settings->add("machine_center_is_zero", "false");
         settings->add("machine_depth", "1000");
         settings->add("machine_extruders_share_nozzle", "false");
@@ -549,6 +549,25 @@ TEST_P(AddTravelTest, NoUnretractBeforeLastTravelMoveIfNoPriorRetraction)
     {
         EXPECT_FALSE(result.unretract_before_last_travel_move) << "If no retraction has been issued, then there should also be no unretraction before the last travel move.";
     }
+}
+
+TEST(NozzleTempInsertTest, SortNozzleTempInsterts)
+{
+    std::vector<NozzleTempInsert> nozzle_temp_inserts {
+        { .path_idx = 1, .extruder = 1, .temperature = 100., .wait = true },
+        { .path_idx = 2, .extruder = 1, .temperature = 110., .wait = false, .time_after_path_start = 2. },
+        { .path_idx = 1, .extruder = 1, .temperature = 120., .wait = true },
+        { .path_idx = 5, .extruder = 1, .temperature = 130., .wait = false, .time_after_path_start = 1. },
+        { .path_idx = 5, .extruder = 1, .temperature = 140., .wait = true },
+        { .path_idx = 2, .extruder = 1, .temperature = 150., .wait = false, .time_after_path_start = 1. },
+    };
+    std::sort(nozzle_temp_inserts.begin(), nozzle_temp_inserts.end());
+    EXPECT_EQ(nozzle_temp_inserts[0].temperature, 100.);
+    EXPECT_EQ(nozzle_temp_inserts[1].temperature, 120.);
+    EXPECT_EQ(nozzle_temp_inserts[2].temperature, 150.);
+    EXPECT_EQ(nozzle_temp_inserts[3].temperature, 110.);
+    EXPECT_EQ(nozzle_temp_inserts[4].temperature, 140.);
+    EXPECT_EQ(nozzle_temp_inserts[5].temperature, 130.);
 }
 
 } // namespace cura
