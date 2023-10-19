@@ -1164,10 +1164,8 @@ void TreeSupportTipGenerator::generateTips(
             {
                 if (use_fake_roof)
                 {
-                    for (auto part : support_roof_drawn[layer_idx].splitIntoParts())
-                    {
-                        storage.support.supportLayers[layer_idx].support_infill_parts.emplace_back(part, config.support_line_width, 0, support_roof_line_distance);
-                    }
+                    storage.support.supportLayers[layer_idx]
+                        .fillInfillParts(layer_idx, support_roof_drawn, config.support_line_width, support_roof_line_distance, config.maximum_move_distance);
                     placed_support_lines_support_areas[layer_idx].add(TreeSupportUtils::generateSupportInfillLines(
                                                                           support_roof_drawn[layer_idx],
                                                                           config,
@@ -1183,6 +1181,18 @@ void TreeSupportTipGenerator::generateTips(
                     storage.support.supportLayers[layer_idx].support_roof.add(support_roof_drawn[layer_idx]);
                     storage.support.supportLayers[layer_idx].support_roof = storage.support.supportLayers[layer_idx].support_roof.unionPolygons(roof_tips_drawn[layer_idx]);
                 }
+            }
+        });
+
+    cura::parallel_for<coord_t>(
+        1,
+        mesh.overhang_areas.size() - z_distance_delta,
+        [&](const LayerIndex layer_idx)
+        {
+            if (layer_idx > 0)
+            {
+                storage.support.supportLayers[layer_idx].support_fractional_roof.add(
+                    storage.support.supportLayers[layer_idx].support_roof.difference(storage.support.supportLayers[layer_idx + 1].support_roof));
             }
         });
 
